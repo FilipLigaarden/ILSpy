@@ -72,6 +72,7 @@ namespace ICSharpCode.Decompiler.Ast
 						v.Name = nv.GetAlternativeName(varName);
 					}
 				} else {
+					string name = v.Name.Substring(1, Math.Max(0, v.Name.IndexOf('>') - 1));
 					if(IsValidName(name)) {
 						v.Name = nv.GetAlternativeName(name);
 					} else {
