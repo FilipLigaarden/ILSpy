@@ -72,7 +72,11 @@ namespace ICSharpCode.Decompiler.Ast
 						v.Name = nv.GetAlternativeName(varName);
 					}
 				} else {
-					v.Name = null;
+					if(IsValidName(name)) {
+						v.Name = nv.GetAlternativeName(name);
+					} else {
+						v.Name = null;
+					}
 				}
 			}
 			// Now generate names:
