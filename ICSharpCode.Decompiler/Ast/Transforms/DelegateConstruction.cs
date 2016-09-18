@@ -310,179 +310,170 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 		{
 			int numberOfVariablesOutsideBlock = currentlyUsedVariableNames.Count;
 			base.VisitBlockStatement(blockStatement, data);
-			bool doAnotherPass;
-			do {
-				doAnotherPass = false;
-				foreach (ExpressionStatement stmt in blockStatement.Statements.OfType<ExpressionStatement>().Reverse().ToArray()) {
-					Match displayClassAssignmentMatch = displayClassAssignmentPattern.Match(stmt);
-					if (!displayClassAssignmentMatch.Success)
-						continue;
+			foreach (ExpressionStatement stmt in blockStatement.Statements.OfType<ExpressionStatement>().Reverse().ToArray()) {
+				Match displayClassAssignmentMatch = displayClassAssignmentPattern.Match(stmt);
+				if (!displayClassAssignmentMatch.Success)
+					continue;
+				
+				ILVariable variable = displayClassAssignmentMatch.Get<AstNode>("variable").Single().Annotation<ILVariable>();
+				if (variable == null)
+					continue;
+				TypeDefinition type = variable.Type.ResolveWithinSameModule();
+				if (!IsPotentialClosure(context, type))
+					continue;
+				if (displayClassAssignmentMatch.Get<AstType>("type").Single().Annotation<TypeReference>().ResolveWithinSameModule() != type)
+					continue;
+				
+				// Looks like we found a display class creation. Now let's verify that the variable is used only for field accesses:
+				bool ok = true;
+				foreach (var identExpr in blockStatement.Descendants.OfType<IdentifierExpression>()) {
+					if (identExpr.Identifier == variable.Name && identExpr != displayClassAssignmentMatch.Get("variable").Single()) {
+						//check if it a cross reference to another generated delegate class's member 
+						if (identExpr.Parent is AssignmentExpression) {
 
-					ILVariable variable = displayClassAssignmentMatch.Get<AstNode>("variable").Single().Annotation<ILVariable>();
-					if (variable == null)
-						continue;
-					TypeDefinition type = variable.Type.ResolveWithinSameModule();
-					if (!IsPotentialClosure(context, type))
-						continue;
-					if (displayClassAssignmentMatch.Get<AstType>("type").Single().Annotation<TypeReference>().ResolveWithinSameModule() != type)
-						continue;
+							if ((identExpr.Parent as AssignmentExpression).Left is MemberReferenceExpression) {
+								MemberReferenceExpression tleft = (MemberReferenceExpression)(identExpr.Parent as AssignmentExpression).Left;
+								ILVariable v = tleft.Target.Annotation<ILVariable>();
+								if (v != null) {
+									TypeDefinition vtype = v.Type.ResolveWithinSameModule();
 
-					// Looks like we found a display class creation. Now let's verify that the variable is used only for field accesses:
-					bool ok = true;
-					foreach (var identExpr in blockStatement.Descendants.OfType<IdentifierExpression>()) {
-						if (identExpr.Identifier == variable.Name && identExpr != displayClassAssignmentMatch.Get("variable").Single()) {
-
-							//check if it a cross reference to another generated delegate class's member 
-							if (identExpr.Parent is AssignmentExpression) {
-
-								if ((identExpr.Parent as AssignmentExpression).Left is MemberReferenceExpression) {
-									MemberReferenceExpression tleft = (MemberReferenceExpression)(identExpr.Parent as AssignmentExpression).Left;
-									ILVariable v = tleft.Target.Annotation<ILVariable>();
-									if (v != null) {
-										TypeDefinition vtype = v.Type.ResolveWithinSameModule();
-
-										if (vtype.IsNested && IsPotentialClosure(context, vtype)) {
-											//a delegate reference will be resolved to referencing this clas, so we go through this all a second time to catch it
-											doAnotherPass = true;
-										}
+									if (vtype.IsNested && IsPotentialClosure(context, vtype)) {
+										//cross reference by delegate  should be ok
+										continue;
 									}
 								}
 							}
-							if (!(identExpr.Parent is MemberReferenceExpression && identExpr.Parent.Annotation<FieldReference>() != null)) {
-								ok = false;
-								break;
-							}
 						}
-					}
-					if (!ok)
-						continue;
-					Dictionary<FieldReference, AstNode> dict = new Dictionary<FieldReference, AstNode>();
-
-					// Delete the variable declaration statement:
-					VariableDeclarationStatement displayClassVarDecl = PatternStatementTransform.FindVariableDeclaration(stmt, variable.Name);
-					if (displayClassVarDecl != null)
-						displayClassVarDecl.Remove();
-
-					// Delete the assignment statement:
-					AstNode cur = stmt.NextSibling;
-					stmt.Remove();
-
-					// Delete any following statements as long as they assign parameters to the display class
-					BlockStatement rootBlock = blockStatement.Ancestors.OfType<BlockStatement>().LastOrDefault() ?? blockStatement;
-					List<ILVariable> parameterOccurrances = rootBlock.Descendants.OfType<IdentifierExpression>()
-						.Select(n => n.Annotation<ILVariable>()).Where(p => p != null && p.IsParameter).ToList();
-					AstNode next;
-					for (; cur != null; cur = next) {
-						next = cur.NextSibling;
-
-						// Test for the pattern:
-						// "variableName.MemberName = right;"
-						ExpressionStatement closureFieldAssignmentPattern = new ExpressionStatement(
-							new AssignmentExpression(
-								new NamedNode("left", new MemberReferenceExpression
-								{
-									Target = new IdentifierExpression(variable.Name),
-									MemberName = Pattern.AnyString
-								}),
-								new AnyNode("right")
-							)
-						);
-						Match m = closureFieldAssignmentPattern.Match(cur);
-						if (m.Success) {
-							FieldDefinition fieldDef = m.Get<MemberReferenceExpression>("left").Single().Annotation<FieldReference>().ResolveWithinSameModule();
-							AstNode right = m.Get<AstNode>("right").Single();
-							bool isParameter = false;
-							bool isDisplayClassParentPointerAssignment = false;
-							if (right is ThisReferenceExpression) {
-								isParameter = true;
-							}
-							else if (right is IdentifierExpression) {
-								// handle parameters only if the whole method contains no other occurrence except for 'right'
-								ILVariable v = right.Annotation<ILVariable>();
-								isParameter = v.IsParameter && parameterOccurrances.Count(c => c == v) == 1;
-								if (!isParameter && IsPotentialClosure(context, v.Type.ResolveWithinSameModule())) {
-									// parent display class within the same method
-									// (closure2.localsX = closure1;)
-									isDisplayClassParentPointerAssignment = true;
-								}
-							}
-							else if (right is MemberReferenceExpression) {
-								// copy of parent display class reference from an outer lambda
-								// closure2.localsX = this.localsY
-								MemberReferenceExpression mre = m.Get<MemberReferenceExpression>("right").Single();
-								do {
-									// descend into the targets of the mre as long as the field types are closures
-									FieldDefinition fieldDef2 = mre.Annotation<FieldReference>().ResolveWithinSameModule();
-									if (fieldDef2 == null || !IsPotentialClosure(context, fieldDef2.FieldType.ResolveWithinSameModule())) {
-										break;
-									}
-									// if we finally get to a this reference, it's copying a display class parent pointer
-									if (mre.Target is ThisReferenceExpression) {
-										isDisplayClassParentPointerAssignment = true;
-									}
-									mre = mre.Target as MemberReferenceExpression;
-								} while (mre != null);
-							}
-							if (isParameter || isDisplayClassParentPointerAssignment) {
-								dict[fieldDef] = right;
-								cur.Remove();
-							}
-							else {
-								break;
-							}
-						}
-						else {
-							//why need to break? continue to match should be ok
+						if (!(identExpr.Parent is MemberReferenceExpression && identExpr.Parent.Annotation<FieldReference>() != null)) {
+							ok = false;
 							break;
 						}
 					}
-
-					// Now create variables for all fields of the display class (except for those that we already handled as parameters)
-					List<Tuple<AstType, ILVariable>> variablesToDeclare = new List<Tuple<AstType, ILVariable>>();
-					foreach (FieldDefinition field in type.Fields) {
-						if (field.IsStatic)
-							continue; // skip static fields
-						if (dict.ContainsKey(field)) // skip field if it already was handled as parameter
-							continue;
-						string capturedVariableName = field.Name;
-						if (capturedVariableName.StartsWith("$VB$Local_", StringComparison.Ordinal) && capturedVariableName.Length > 10)
-							capturedVariableName = capturedVariableName.Substring(10);
-						EnsureVariableNameIsAvailable(blockStatement, capturedVariableName);
-						currentlyUsedVariableNames.Add(capturedVariableName);
-						ILVariable ilVar = new ILVariable
-						{
-							IsGenerated = true,
-							Name = capturedVariableName,
-							Type = field.FieldType,
-						};
-						variablesToDeclare.Add(Tuple.Create(AstBuilder.ConvertType(field.FieldType, field), ilVar));
-						dict[field] = new IdentifierExpression(capturedVariableName).WithAnnotation(ilVar);
-					}
-
-					// Now figure out where the closure was accessed and use the simpler replacement expression there:
-					foreach (var identExpr in blockStatement.Descendants.OfType<IdentifierExpression>()) {
-						if (identExpr.Identifier == variable.Name) {
-							if (!(identExpr.Parent is MemberReferenceExpression)) {
-								//will delete by the next round of the cross reference delegate class
-								continue;
+				}
+				if (!ok)
+					continue;
+				Dictionary<FieldReference, AstNode> dict = new Dictionary<FieldReference, AstNode>();
+				
+				// Delete the variable declaration statement:
+				VariableDeclarationStatement displayClassVarDecl = PatternStatementTransform.FindVariableDeclaration(stmt, variable.Name);
+				if (displayClassVarDecl != null)
+					displayClassVarDecl.Remove();
+				
+				// Delete the assignment statement:
+				AstNode cur = stmt.NextSibling;
+				stmt.Remove();
+				
+				// Delete any following statements as long as they assign parameters to the display class
+				BlockStatement rootBlock = blockStatement.Ancestors.OfType<BlockStatement>().LastOrDefault() ?? blockStatement;
+				List<ILVariable> parameterOccurrances = rootBlock.Descendants.OfType<IdentifierExpression>()
+					.Select(n => n.Annotation<ILVariable>()).Where(p => p != null && p.IsParameter).ToList();
+				AstNode next;
+				for (; cur != null; cur = next) {
+					next = cur.NextSibling;
+					
+					// Test for the pattern:
+					// "variableName.MemberName = right;"
+					ExpressionStatement closureFieldAssignmentPattern = new ExpressionStatement(
+						new AssignmentExpression(
+							new NamedNode("left", new MemberReferenceExpression { 
+							              	Target = new IdentifierExpression(variable.Name),
+							              	MemberName = Pattern.AnyString
+							              }),
+							new AnyNode("right")
+						)
+					);
+					Match m = closureFieldAssignmentPattern.Match(cur);
+					if (m.Success) {
+						FieldDefinition fieldDef = m.Get<MemberReferenceExpression>("left").Single().Annotation<FieldReference>().ResolveWithinSameModule();
+						AstNode right = m.Get<AstNode>("right").Single();
+						bool isParameter = false;
+						bool isDisplayClassParentPointerAssignment = false;
+						if (right is ThisReferenceExpression) {
+							isParameter = true;
+						} else if (right is IdentifierExpression) {
+							// handle parameters only if the whole method contains no other occurrence except for 'right'
+							ILVariable v = right.Annotation<ILVariable>();
+							isParameter = v.IsParameter && parameterOccurrances.Count(c => c == v) == 1;
+							if (!isParameter && IsPotentialClosure(context, v.Type.ResolveWithinSameModule())) {
+								// parent display class within the same method
+								// (closure2.localsX = closure1;)
+								isDisplayClassParentPointerAssignment = true;
 							}
-							MemberReferenceExpression mre = (MemberReferenceExpression)identExpr.Parent;
-							AstNode replacement;
-							if (dict.TryGetValue(mre.Annotation<FieldReference>().ResolveWithinSameModule(), out replacement)) {
-								mre.ReplaceWith(replacement.Clone());
-							}
+						} else if (right is MemberReferenceExpression) {
+							// copy of parent display class reference from an outer lambda
+							// closure2.localsX = this.localsY
+							MemberReferenceExpression mre = m.Get<MemberReferenceExpression>("right").Single();
+							do {
+								// descend into the targets of the mre as long as the field types are closures
+								FieldDefinition fieldDef2 = mre.Annotation<FieldReference>().ResolveWithinSameModule();
+								if (fieldDef2 == null || !IsPotentialClosure(context, fieldDef2.FieldType.ResolveWithinSameModule())) {
+									break;
+								}
+								// if we finally get to a this reference, it's copying a display class parent pointer
+								if (mre.Target is ThisReferenceExpression) {
+									isDisplayClassParentPointerAssignment = true;
+								}
+								mre = mre.Target as MemberReferenceExpression;
+							} while (mre != null);
+						}
+						if (isParameter || isDisplayClassParentPointerAssignment) {
+							dict[fieldDef] = right;
+							cur.Remove();
+						} else {
+							break;
 						}
 					}
-					// Now insert the variable declarations (we can do this after the replacements only so that the scope detection works):
-					Statement insertionPoint = blockStatement.Statements.FirstOrDefault();
-					foreach (var tuple in variablesToDeclare) {
-						var newVarDecl = new VariableDeclarationStatement(tuple.Item1, tuple.Item2.Name);
-						newVarDecl.Variables.Single().AddAnnotation(new CapturedVariableAnnotation());
-						newVarDecl.Variables.Single().AddAnnotation(tuple.Item2);
-						blockStatement.Statements.InsertBefore(insertionPoint, newVarDecl);
+                    else {
+                        //why need to break? continue to match should be ok
+						//break;
 					}
 				}
-			} while (doAnotherPass);
+				
+				// Now create variables for all fields of the display class (except for those that we already handled as parameters)
+				List<Tuple<AstType, ILVariable>> variablesToDeclare = new List<Tuple<AstType, ILVariable>>();
+				foreach (FieldDefinition field in type.Fields) {
+					if (field.IsStatic)
+						continue; // skip static fields
+					if (dict.ContainsKey(field)) // skip field if it already was handled as parameter
+						continue;
+					string capturedVariableName = field.Name;
+					if (capturedVariableName.StartsWith("$VB$Local_", StringComparison.Ordinal) && capturedVariableName.Length > 10)
+						capturedVariableName = capturedVariableName.Substring(10);
+					EnsureVariableNameIsAvailable(blockStatement, capturedVariableName);
+					currentlyUsedVariableNames.Add(capturedVariableName);
+					ILVariable ilVar = new ILVariable
+					{
+						IsGenerated = true,
+						Name = capturedVariableName,
+						Type = field.FieldType,
+					};
+					variablesToDeclare.Add(Tuple.Create(AstBuilder.ConvertType(field.FieldType, field), ilVar));
+					dict[field] = new IdentifierExpression(capturedVariableName).WithAnnotation(ilVar);
+				}
+				
+				// Now figure out where the closure was accessed and use the simpler replacement expression there:
+				foreach (var identExpr in blockStatement.Descendants.OfType<IdentifierExpression>()) {
+					if (identExpr.Identifier == variable.Name) {
+                        if (!(identExpr.Parent is MemberReferenceExpression)) {
+                            //will delete by the next round of the cross reference delegate class
+                            continue;
+                        }
+						MemberReferenceExpression mre = (MemberReferenceExpression)identExpr.Parent;
+						AstNode replacement;
+						if (dict.TryGetValue(mre.Annotation<FieldReference>().ResolveWithinSameModule(), out replacement)) {
+							mre.ReplaceWith(replacement.Clone());
+						}
+					}
+				}
+				// Now insert the variable declarations (we can do this after the replacements only so that the scope detection works):
+				Statement insertionPoint = blockStatement.Statements.FirstOrDefault();
+				foreach (var tuple in variablesToDeclare) {
+					var newVarDecl = new VariableDeclarationStatement(tuple.Item1, tuple.Item2.Name);
+					newVarDecl.Variables.Single().AddAnnotation(new CapturedVariableAnnotation());
+					newVarDecl.Variables.Single().AddAnnotation(tuple.Item2);
+					blockStatement.Statements.InsertBefore(insertionPoint, newVarDecl);
+				}
+			}
 			currentlyUsedVariableNames.RemoveRange(numberOfVariablesOutsideBlock, currentlyUsedVariableNames.Count - numberOfVariablesOutsideBlock);
 			return null;
 		}
