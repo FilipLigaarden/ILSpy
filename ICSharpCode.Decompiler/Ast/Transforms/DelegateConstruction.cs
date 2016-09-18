@@ -313,7 +313,7 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 			bool doAnotherPass;
 			do {
 				doAnotherPass = false;
-				foreach (ExpressionStatement stmt in blockStatement.Statements.OfType<ExpressionStatement>().ToArray()) {
+				foreach (ExpressionStatement stmt in blockStatement.Statements.OfType<ExpressionStatement>().Reverse().ToArray()) {
 					Match displayClassAssignmentMatch = displayClassAssignmentPattern.Match(stmt);
 					if (!displayClassAssignmentMatch.Success)
 						continue;
