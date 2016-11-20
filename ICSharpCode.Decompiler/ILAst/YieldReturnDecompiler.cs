@@ -704,9 +704,10 @@ namespace ICSharpCode.Decompiler.ILAst
 
 			return false;
 		}
+		
 		void ScanLine(YieldVMStat vm, int start, int stop)
 		{
-
+			bool needsSwitch = (start == 0);
 			int m = start;
 
 
@@ -768,7 +769,6 @@ namespace ICSharpCode.Decompiler.ILAst
 									//impossible 
 									//not impossible, default case can immediately follow the switch command without a branch
 									//throw new SymbolicAnalysisFailedException();
-									var x = 1;
 								}
 								ILExpression switchDefault = vm.usefulList[m + 1] as ILExpression;
 								jmpLabel = switchDefault.Operand as ILLabel;
@@ -781,11 +781,14 @@ namespace ICSharpCode.Decompiler.ILAst
 								pendingSwitchExprJumpLableIndex < lbList.Length) {
 								bool addedJump = false;
 								if (expr == vm.firstStateSwitchExpr) {
+									needsSwitch = false;
 									addedJump = vm.addNewNode(new ILExpression(ILCode.Br, jmpLabel), m);
-									if (!addedJump && vm.fieldStatChangedPos.ContainsKey(finalStatVal)) {
-										int stateStartPos = vm.fieldStatChangedPos[finalStatVal];
-										addedJump = vm.addNewNode(new ILExpression(ILCode.Br, jmpLabel), stateStartPos);
-									}
+									//I'm not sure what this was supposed to do, but removing it only fixed code that was wrong
+									//(inappropriate 'while (true)' and dropping the 'else' from 'else if's.
+									//if (!addedJump && vm.fieldStatChangedPos.ContainsKey(finalStatVal)) {
+									//	int stateStartPos = vm.fieldStatChangedPos[finalStatVal];
+									//	addedJump = vm.addNewNode(new ILExpression(ILCode.Br, jmpLabel), stateStartPos);
+									//}
 
 									vm.localStatChangedPos.Clear();
 								} else {
@@ -1008,7 +1011,7 @@ namespace ICSharpCode.Decompiler.ILAst
 
 
 				if (!skipNode) {
-					if (!vm.addNewNode(node, m)) {
+					if (!vm.addNewNode(node, m) && !needsSwitch) {
 						return;
 					}
 				}
@@ -1226,7 +1229,6 @@ namespace ICSharpCode.Decompiler.ILAst
 					vm.labelMapping[(node as ILLabel)] = i;
 				}
 			}
-
 
 			int scanTimes = vm.firstStateSwitchLabelList.Count;
 
