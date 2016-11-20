@@ -29,6 +29,7 @@ namespace ICSharpCode.Decompiler.ILAst
 	{
 		public ILTryCatchBlock blk;
 		public List<ILNode> nodelistRef;
+		public ILTryCatchBlockInfo parentBlk;
 	}
 
 	public class YieldVMStat
@@ -121,7 +122,14 @@ namespace ICSharpCode.Decompiler.ILAst
 
 						if (!addedTryCatchBlock.Contains(this.tryBlockMapping[i].blk)) {
 							addedTryCatchBlock.Add(this.tryBlockMapping[i].blk);
-							b.Add(this.tryBlockMapping[i].blk);
+							if (this.tryBlockMapping[i].parentBlk != null)
+							{
+								this.tryBlockMapping[i].parentBlk.nodelistRef.Add(this.tryBlockMapping[i].blk);
+							}
+							else
+							{
+								b.Add(this.tryBlockMapping[i].blk);
+							}
 						}
 						this.tryBlockMapping[i].nodelistRef.Add(lastNode);
 					} else {
@@ -952,134 +960,10 @@ namespace ICSharpCode.Decompiler.ILAst
 			if (!ilMethod.Body.Last().Match(ILCode.Ret, out lastReturnArg))
 				throw new SymbolicAnalysisFailedException();
 
-			ILLabel lastLabel = null;
-
 			//can once to retrive pc , current , pc's local, usage ILNode
 			YieldVMStat vm = new YieldVMStat();
 
-			for (int i = 0; i < ilMethod.Body.Count; i++) {
-				ILNode node = ilMethod.Body[i];
-
-				if (node is ILExpression) {
-					ILExpression expr = node as ILExpression;
-					switch (expr.Code) {
-						case ILCode.Stloc:
-							//if argument is stateField;
-							//set statelocal = local;
-							if (vm.statILVariable == null && expr.Arguments[0].Code == ILCode.Ldfld
-								&& GetFieldDefinition(expr.Arguments[0].Operand as FieldReference) == stateField) {
-								vm.statILVariable = expr.Operand as ILVariable;
-							}
-							break;
-						case ILCode.Ret:
-							//find out the return Jump Label and stat
-							ILExpression retArg = expr.Arguments[0];
-
-							if (retArg.Code == ILCode.Ldloc) {
-								// a) the compiler uses a variable for returns (in debug builds, or when there are try-finally blocks)
-								returnVariable = (ILVariable)lastReturnArg.Operand;
-								returnLabel = ilMethod.Body.ElementAtOrDefault(ilMethod.Body.Count - 2) as ILLabel;
-								if (returnLabel == null)
-									throw new SymbolicAnalysisFailedException();
-							} else {
-								// b) the compiler directly returns constants
-								if (retArg.Code != ILCode.Ldc_I4) {
-									throw new SymbolicAnalysisFailedException();
-								}
-
-								if ((int)retArg.Operand == 0) {
-									returnFalseLabel = lastLabel;
-								} else {
-									returnTrueLabel = lastLabel;
-								}
-							}
-							break;
-					}
-					vm.usefulList.Add(expr);
-				} else if (node is ILTryCatchBlock)
-				{
-					ILTryCatchBlock tryBlock = node as ILTryCatchBlock;
-
-					if (vm.skipFinallyILVariable == null && tryBlock.FinallyBlock != null)
-					{
-						//Should probably do something a little more robust than assuming it's always the third expression, but that is true currently
-						ILExpression blkExpr = vm.usefulList[2] as ILExpression;
-						if (blkExpr.Code == ILCode.Stloc && blkExpr.Operand != vm.statILVariable &&
-							blkExpr.Arguments[0].Code == ILCode.Ldc_I4)
-						{
-							vm.skipFinallyILVariable = blkExpr.Operand as ILVariable;
-						}
-					}
-
-					if (tryBlock.TryBlock != null)
-					{
-						foreach (ILNode blkNode in tryBlock.TryBlock.Body)
-						{
-							vm.usefulList.Add(blkNode);
-							vm.tryBlockMapping[vm.usefulList.Count - 1] = new ILTryCatchBlockInfo()
-							{
-								blk = tryBlock,
-								nodelistRef = tryBlock.TryBlock.Body
-							};
-						}
-						tryBlock.TryBlock.Body.Clear();
-					}
-
-
-					if (tryBlock.CatchBlocks.Count != 0)
-					{
-						foreach (ILTryCatchBlock.CatchBlock blk in tryBlock.CatchBlocks)
-						{
-							foreach (ILNode blkNode in blk.Body)
-							{
-								vm.usefulList.Add(blkNode);
-								vm.tryBlockMapping[vm.usefulList.Count - 1] = new ILTryCatchBlockInfo()
-								{
-									blk = tryBlock,
-									nodelistRef = blk.Body
-								};
-							}
-							blk.Body.Clear();
-						}
-					}
-
-					if (tryBlock.FinallyBlock != null)
-					{
-						foreach (ILNode blkNode in tryBlock.FinallyBlock.Body)
-						{
-							vm.usefulList.Add(blkNode);
-							vm.tryBlockMapping[vm.usefulList.Count - 1] = new ILTryCatchBlockInfo()
-							{
-								blk = tryBlock,
-								nodelistRef = tryBlock.FinallyBlock.Body
-							};
-						}
-						tryBlock.FinallyBlock.Body.Clear();
-					}
-
-
-					if (tryBlock.FaultBlock != null)
-					{
-						foreach (ILNode blkNode in tryBlock.FaultBlock.Body)
-						{
-							vm.usefulList.Add(blkNode);
-							vm.tryBlockMapping[vm.usefulList.Count - 1] = new ILTryCatchBlockInfo()
-							{
-								blk = tryBlock,
-								nodelistRef = tryBlock.FaultBlock.Body
-							};
-						}
-						tryBlock.FaultBlock.Body.Clear();
-					}
-				}
-				else if (node is ILLabel) {
-					lastLabel = node as ILLabel;
-					vm.usefulList.Add(node);
-				} else {
-					//add it to usageList
-					vm.usefulList.Add(node);
-				}
-			}
+			BlockToUsefulList(ilMethod, vm, lastReturnArg);
 			
 			//make all the lable and get first case switch 
 
@@ -1157,6 +1041,97 @@ namespace ICSharpCode.Decompiler.ILAst
 			return true;
 
 		}
+
+		private void BlockToUsefulList(ILBlock ilBlock, YieldVMStat vm, ILExpression lastReturnArg, ILTryCatchBlockInfo tryBlockInfo = null)
+		{
+			ILLabel lastLabel = null;
+			for (int i = 0; i < ilBlock.Body.Count; i++)
+			{
+				ILNode node = ilBlock.Body[i];
+
+				if (node is ILExpression)
+				{
+					ILExpression expr = node as ILExpression;
+					switch (expr.Code)
+					{
+						case ILCode.Stloc:
+							//if argument is stateField;
+							//set statelocal = local;
+							if (vm.statILVariable == null && expr.Arguments[0].Code == ILCode.Ldfld
+							    && GetFieldDefinition(expr.Arguments[0].Operand as FieldReference) == stateField)
+							{
+								vm.statILVariable = expr.Operand as ILVariable;
+							}
+							break;
+						case ILCode.Ret:
+							//find out the return Jump Label and stat
+							ILExpression retArg = expr.Arguments[0];
+
+							if (retArg.Code == ILCode.Ldloc)
+							{
+								// a) the compiler uses a variable for returns (in debug builds, or when there are try-finally blocks)
+								returnVariable = (ILVariable) lastReturnArg.Operand;
+								returnLabel = ilBlock.Body.ElementAtOrDefault(ilBlock.Body.Count - 2) as ILLabel;
+								if (returnLabel == null)
+									throw new SymbolicAnalysisFailedException();
+							}
+							else
+							{
+								// b) the compiler directly returns constants
+								if (retArg.Code != ILCode.Ldc_I4)
+								{
+									throw new SymbolicAnalysisFailedException();
+								}
+
+								if ((int) retArg.Operand == 0)
+								{
+									returnFalseLabel = lastLabel;
+								}
+								else
+								{
+									returnTrueLabel = lastLabel;
+								}
+							}
+							break;
+					}
+					vm.usefulList.Add(expr);
+					if (tryBlockInfo != null) vm.tryBlockMapping[vm.usefulList.Count - 1] = tryBlockInfo;
+				}
+				else if (node is ILTryCatchBlock)
+				{
+					ILTryCatchBlock tryBlock = node as ILTryCatchBlock;
+
+					if (vm.skipFinallyILVariable == null && tryBlock.FinallyBlock != null)
+					{
+						//Should probably do something a little more robust than assuming it's always the third expression, but that is true currently
+						ILExpression blkExpr = vm.usefulList[2] as ILExpression;
+						if (blkExpr.Code == ILCode.Stloc && blkExpr.Operand != vm.statILVariable &&
+						    blkExpr.Arguments[0].Code == ILCode.Ldc_I4)
+						{
+							vm.skipFinallyILVariable = blkExpr.Operand as ILVariable;
+						}
+					}
+					
+					foreach (ILBlock blk in tryBlock.GetChildren().Cast<ILBlock>())
+					{
+						BlockToUsefulList(blk, vm, lastReturnArg,
+							new ILTryCatchBlockInfo() {blk = tryBlock, nodelistRef = blk.Body, parentBlk = tryBlockInfo});
+						blk.Body.Clear();
+					}
+				}
+				else
+				{
+					if (node is ILLabel)
+					{
+						lastLabel = node as ILLabel;
+					}
+					//add it to usageList
+					vm.usefulList.Add(node);
+					if (tryBlockInfo != null) vm.tryBlockMapping[vm.usefulList.Count - 1] = tryBlockInfo;
+				}
+			}
+		}
+
 		#region ConvertBody
 		struct SetState
 		{
