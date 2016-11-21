@@ -102,7 +102,12 @@ namespace ICSharpCode.Decompiler.ILAst
 			if (method.Body.Count > 0 && method.Body.Last().Match(ILCode.Ret) && ((ILExpression)method.Body.Last()).Arguments.Count == 0) {
 				method.Body.RemoveAt(method.Body.Count - 1);
 			}
-			
+
+			if (method.Body.Count > 0 && method.Body.Last().Match(ILCode.YieldBreak) && ((ILExpression)method.Body.Last()).Arguments.Count == 0)
+			{
+				method.Body.RemoveAt(method.Body.Count - 1);
+			}
+
 			// Remove unreachable return statements
 			bool modified = false;
 			foreach(ILBlock block in method.GetSelfAndChildrenRecursive<ILBlock>()) {
