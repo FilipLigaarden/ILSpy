@@ -773,7 +773,7 @@ namespace ICSharpCode.Decompiler.ILAst
 						if (!vm.addNewNode(node, m))
 							return;
 						//add in finally block
-						if (vm.tryBlockMapping.ContainsKey(m + 1) && vm.tryBlockMapping[m].blk == vm.tryBlockMapping[m + 1].blk &&
+						if (vm.tryBlockMapping.ContainsKey(m) && vm.tryBlockMapping.ContainsKey(m + 1) && vm.tryBlockMapping[m].blk == vm.tryBlockMapping[m + 1].blk &&
 						    vm.tryBlockMapping[m].nodelistRef != vm.tryBlockMapping[m + 1].nodelistRef)
 							ScanLine(vm, m + 1, vm.usefulList.Count);
 						if (lbPos < m)
