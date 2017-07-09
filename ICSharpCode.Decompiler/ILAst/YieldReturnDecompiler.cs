@@ -164,6 +164,7 @@ namespace ICSharpCode.Decompiler.ILAst
 		MethodDefinition disposeMethod;
 		FieldDefinition stateField;
 		FieldDefinition currentField;
+		FieldDefinition disposingField;
 		MethodDefinition moveNextMethod;
 		int initPCValue = 0;
 		Dictionary<FieldDefinition, ILVariable> fieldToParameterMap = new Dictionary<FieldDefinition, ILVariable>();
@@ -357,6 +358,8 @@ namespace ICSharpCode.Decompiler.ILAst
 			currentField = ctor.DeclaringType.Fields.FirstOrDefault(v => v.Name == "$current");
 			if (currentField == null)
 				return false;
+
+			disposingField = ctor.DeclaringType.Fields.FirstOrDefault(v => v.Name == "$disposing"); //Only in newer Mono versions; not an error if it's absent
 
 			disposeMethod = ctor.DeclaringType.Methods.FirstOrDefault(m => m.Name == "Dispose");
 			if (disposeMethod == null)
@@ -891,6 +894,14 @@ namespace ICSharpCode.Decompiler.ILAst
 							} else if (YieldReturnDecompiler.GetFieldDefinition(expr.Operand as FieldReference) == this.currentField) {
 								//state should change
 								vm.addNewNode(new ILExpression(ILCode.YieldReturn, null, expr.Arguments[1]), m);
+
+								if (m + 1 < vm.usefulList.Count) {
+									ILExpression nextExpr = vm.usefulList[m + 1] as ILExpression;
+									if (nextExpr.Code == ILCode.Brtrue
+										&& GetFieldDefinition(nextExpr.Arguments[0].Operand as FieldReference) == this.disposingField){
+										m++; //Just an if (!$disposing) check, not important to the final code
+									}
+								}
 
 								if (m + 1 < vm.usefulList.Count) {
 									ILExpression nextExpr = vm.usefulList[m + 1] as ILExpression;
