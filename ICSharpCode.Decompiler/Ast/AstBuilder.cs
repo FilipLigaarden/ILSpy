@@ -94,6 +94,8 @@ namespace ICSharpCode.Decompiler.Ast
 			FieldDefinition field = member as FieldDefinition;
 			if (field != null) {
 				if (field.IsCompilerGenerated()) {
+					if (IsDelegateMethodCacheField(field))
+						return true;
 					if (settings.AnonymousMethods && IsAnonymousMethodCacheField(field))
 						return true;
 					if (settings.AutomaticProperties && IsAutomaticPropertyBackingField(field))
@@ -122,6 +124,11 @@ namespace ICSharpCode.Decompiler.Ast
 		static bool IsAnonymousMethodCacheField(FieldDefinition field)
 		{
 			return field.Name.StartsWith("CS$<>", StringComparison.Ordinal) || field.Name.StartsWith("<>f__am", StringComparison.Ordinal);
+		}
+
+		static bool IsDelegateMethodCacheField(FieldDefinition field)
+		{
+			return field.Name.StartsWith("<>f__mg", StringComparison.Ordinal);
 		}
 
 		static bool IsClosureType(TypeDefinition type)

@@ -198,10 +198,12 @@ namespace ICSharpCode.Decompiler.ILAst
 				return;
 			if (newObj.Arguments[1].Code != ILCode.Ldftn)
 				return;
-			MethodDefinition anonymousMethod = ((MethodReference)newObj.Arguments[1].Operand).ResolveWithinSameModule(); // method is defined in current assembly
-			if (!Ast.Transforms.DelegateConstruction.IsAnonymousMethod(context, anonymousMethod))
-				return;
-			
+			if (!field.IsCompilerGenerated()) //If it's a compiler generated field, it's a cached delegate initialization, whether or not the method is anonymous (Mono caches method group implicit delegates)
+			{
+				MethodDefinition anonymousMethod = ((MethodReference)newObj.Arguments[1].Operand).ResolveWithinSameModule(); // method is defined in current assembly
+				if (!Ast.Transforms.DelegateConstruction.IsAnonymousMethod(context, anonymousMethod))
+					return;
+			}
 			ILNode followingNode = block.Body.ElementAtOrDefault(i + 1);
 			if (followingNode != null && followingNode.GetSelfAndChildrenRecursive<ILExpression>().Count(
 				e => e.Code == ILCode.Ldsfld && ((FieldReference)e.Operand).ResolveWithinSameModule() == field) == 1)
