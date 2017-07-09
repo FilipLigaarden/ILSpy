@@ -182,30 +182,49 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 			}
 		}
 		},
-		{ "f#",
+		{ "f#", //Also, Mono
 			new TryCatchStatement {
 			TryBlock = new AnyNode(),
 			FinallyBlock =
-					new BlockStatement {
-						new ExpressionStatement(
-							new AssignmentExpression(left: new NamedNode("disposable", new IdentifierExpression(Pattern.AnyString)),
-														right: new AsExpression(expression: new NamedNode("ident", new IdentifierExpression(Pattern.AnyString)),
-																				type: new TypePattern(typeof(IDisposable))
-																				)
-							)
-						),
-						new IfElseStatement {
-							Condition = new BinaryOperatorExpression(
-								new Backreference("disposable"),
-								BinaryOperatorType.InEquality,
-								new NullReferenceExpression()
-							),
-							TrueStatement = new BlockStatement {
-								new ExpressionStatement(InvokeDispose(new Backreference("disposable")))
+					new Choice {
+						{ "normal", new BlockStatement {
+								new ExpressionStatement(
+									new AssignmentExpression(left: new NamedNode("disposable", new IdentifierExpression(Pattern.AnyString)),
+																right: new AsExpression(expression: new NamedNode("ident", new IdentifierExpression(Pattern.AnyString)),
+																						type: new TypePattern(typeof(IDisposable))
+																						)
+									)
+								),
+								new IfElseStatement {
+									Condition = new BinaryOperatorExpression(
+										new Backreference("disposable"),
+										BinaryOperatorType.InEquality,
+										new NullReferenceExpression()
+									),
+									TrueStatement = new BlockStatement {
+										new ExpressionStatement(InvokeDispose(new Backreference("disposable")))
+									}
+								}
+							}
+						},
+						{ "assignmentInIfStatement", new BlockStatement {
+									new IfElseStatement {
+										Condition = new BinaryOperatorExpression(
+											 new AssignmentExpression(left:  new NamedNode("disposable", new IdentifierExpression(Pattern.AnyString)),
+																right: new AsExpression(expression: new NamedNode("ident", new IdentifierExpression(Pattern.AnyString)),
+																						type: new TypePattern(typeof(IDisposable))
+																						)),
+											BinaryOperatorType.InEquality,
+											new NullReferenceExpression()
+										),
+										TrueStatement = new BlockStatement {
+											new ExpressionStatement(InvokeDispose(new Backreference("disposable")))
+										}
+									}
+								}
 							}
 						}
 					}
-				}
 			}
 		};
 		
