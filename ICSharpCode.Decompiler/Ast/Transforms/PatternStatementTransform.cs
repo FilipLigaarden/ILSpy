@@ -404,7 +404,9 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 						new AssignmentExpression {
 							Left = new IdentifierExpression(Pattern.AnyString).WithName("itemVariable"),
 							Operator = AssignmentOperatorType.Assign,
-							Right = new IdentifierExpressionBackreference("enumeratorVariable").ToExpression().Member("Current")
+							Right =new Choice() { new IdentifierExpressionBackreference("enumeratorVariable").ToExpression().Member("Current"),
+											new IdentifierExpressionBackreference("enumeratorVariable").ToExpression().Member("Current").CastTo(new AnyNode()) //The cast matches Mono non-generic foreaches (which also don't match the non-generic foreach pattern)
+									}	
 						},
 						new Repeat(new AnyNode("statement")).ToStatement()
 					}
@@ -413,6 +415,7 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 		
 		public ForeachStatement TransformForeach(UsingStatement node)
 		{
+			//return null;
 			Match m = genericForeachPattern.Match(node);
 			if (!m.Success)
 				return null;
@@ -427,17 +430,26 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 			// Find the declaration of the item variable:
 			// Because we look only outside the loop, we won't make the mistake of moving a captured variable across the loop boundary
 			VariableDeclarationStatement itemVarDecl = FindVariableDeclaration(loop, itemVar.Identifier);
-			if (itemVarDecl == null || !(itemVarDecl.Parent is BlockStatement))
-				return null;
-			
-			// Now verify that we can move the variable declaration in front of the loop:
-			Statement declarationPoint;
-			CanMoveVariableDeclarationIntoStatement(itemVarDecl, loop, out declarationPoint);
-			// We ignore the return value because we don't care whether we can move the variable into the loop
-			// (that is possible only with non-captured variables).
-			// We just care that we can move it in front of the loop:
-			if (declarationPoint != loop)
-				return null;
+			if (itemVarDecl != null)
+			{
+				if (!(itemVarDecl.Parent is BlockStatement))
+					return null;
+
+				// Now verify that we can move the variable declaration in front of the loop:
+				Statement declarationPoint;
+				CanMoveVariableDeclarationIntoStatement(itemVarDecl, loop, out declarationPoint);
+				// We ignore the return value because we don't care whether we can move the variable into the loop
+				// (that is possible only with non-captured variables).
+				// We just care that we can move it in front of the loop:
+				if (declarationPoint != loop)
+					return null;
+			}
+			else //It's okay for the variable declaration to be inside the loop (there should probably be some verification that it's at the beginning of it, though)
+			{
+				itemVarDecl = FindVariableDeclaration(itemVar, itemVar.Identifier);
+				if (itemVarDecl == null)
+					return null;
+			}
 
 			// Make sure that the enumerator variable is not used inside the body
 			var enumeratorId = Identifier.Create(enumeratorVar.Name);
@@ -447,7 +459,7 @@ namespace ICSharpCode.Decompiler.Ast.Transforms
 			}
 			
 			BlockStatement newBody = new BlockStatement();
-			foreach (Statement stmt in m.Get<Statement>("variablesInsideLoop"))
+			foreach (Statement stmt in m.Get<Statement>("variablesInsideLoop").Except(new[] {itemVarDecl}))
 				newBody.Add(stmt.Detach());
 			foreach (Statement stmt in m.Get<Statement>("statement"))
 				newBody.Add(stmt.Detach());
